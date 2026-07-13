@@ -74,6 +74,7 @@ export ANTHROPIC_API_KEY="your_key_here"   # enables AI-assisted reporting (Phas
 ```
 
 ## Architecture
+```
 PhantomStrike/
 ├── main.py                     # CLI entry point (argparse)
 ├── phantomstrike/
@@ -88,6 +89,7 @@ PhantomStrike/
 ├── output/                     # JSON results and PDF reports (gitignored)
 └── learning_exercises/         # raw socket fundamentals exercises
 
+```
 ## About
 
 Built by Pratham, final-year B.Tech Computer Engineering student, as a portfolio project for penetration testing roles.
