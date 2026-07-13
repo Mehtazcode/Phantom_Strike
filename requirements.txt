@@ -1,0 +1,20 @@
+# Core
+requests>=2.31.0
+dnspython>=2.4.2
+beautifulsoup4>=4.12.2
+
+# Recon (optional API integration, Phase 1)
+shodan>=1.30.0
+
+# CLI / output formatting
+rich>=13.7.0
+click>=8.1.7
+
+# Networking helpers (Phase 3, default-credential checks)
+paramiko>=3.4.0
+
+# Reporting (Phase 5)
+fpdf2>=2.7.6
+
+# Data handling (used by scanner/report modules for storing results)
+# (sqlite3 is in the Python standard library, no install needed)
