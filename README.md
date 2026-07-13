@@ -75,18 +75,18 @@ export ANTHROPIC_API_KEY="your_key_here"   # enables AI-assisted reporting (Phas
 
 ## Architecture
 PhantomStrike/
-├── main.py                    # CLI entry point (argparse)
+├── main.py                     # CLI entry point (argparse)
 ├── phantomstrike/
-│   ├── core/                  # config, banner
-│   ├── recon/                 # Phase 1 — ReconEngine
-│   ├── scanner/                # Phase 2 — PortScanner
-│   ├── vuln/                   # Phase 3 — VulnDetector
-│   ├── payload/                 # Phase 4 — PayloadGenerator
-│   ├── report/                  # Phase 5 — ReportGenerator
-│   └── utils/                   # shared logger
+│   ├── core/                   # config, banner
+│   ├── recon/                  # Phase 1 - ReconEngine
+│   ├── scanner/                # Phase 2 - PortScanner
+│   ├── vuln/                   # Phase 3 - VulnDetector
+│   ├── payload/                # Phase 4 - PayloadGenerator
+│   ├── report/                 # Phase 5 - ReportGenerator
+│   └── utils/                  # shared logger
 ├── data/wordlists/
 ├── output/                     # JSON results and PDF reports (gitignored)
-└── learning_exercises/          # raw socket fundamentals exercises
+└── learning_exercises/         # raw socket fundamentals exercises
 
 ## About
 
