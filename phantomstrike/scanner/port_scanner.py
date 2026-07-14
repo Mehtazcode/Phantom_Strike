@@ -1,16 +1,10 @@
 """
 scanner/port_scanner.py — PHASE 2 (Weeks 8-12)
 
-This is where learning_exercises/02_simple_port_checker.py grows up.
-You already proved the single-port logic works in Phase 0 — this
-module's job is to make it fast (threaded) and useful (banner grabbing
-+ service detection), then wrap it in a reusable class.
-
-Build order:
-  1. scan_port()        — basically your Phase 0 exercise, moved here
-  2. grab_banner()       — read the first bytes a service sends
-  3. scan_range()        — threaded scan across many ports
-  4. detect_service()    — match banners against known patterns
+TCP connect scan (nmap -sT style) — full three-way handshake, no root
+required. Raw SYN scan (half-open, -sS style) is a tracked upgrade for
+a later pass; this MVP proves the pipeline (threaded scan -> banner
+grab -> service detect -> save) works end to end first.
 """
 
 import socket
@@ -35,78 +29,110 @@ class PortScanner:
 
     def scan_port(self, port: int) -> dict:
         """
-        TODO (Week 8):
-        - This is your learning_exercises/02_simple_port_checker.py
-          check_port() function, adapted to return a richer dict instead
-          of just a string:
-          {"port": port, "status": "open"/"closed"/"filtered", "banner": None}
-        - Copy your working logic over from the exercise, don't rewrite
-          from scratch — the point of Phase 0 was to build this once.
+        Single-port TCP connect scan.
+        connect_ex() instead of connect() -- returns an errno instead of
+        raising, cheaper to check across hundreds of ports in a loop.
+        On open ports we keep the socket alive for grab_banner() and
+        stash it under "_sock" (popped before results are saved to JSON).
         """
-        logger.warning("scan_port() not implemented — copy logic from Phase 0 exercise")
-        raise NotImplementedError("Build this in Phase 2, Week 8")
+        result = {"port": port, "status": "closed", "banner": None}
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+
+        try:
+            err = sock.connect_ex((self.target, port))
+            result["status"] = "open" if err == 0 else "closed"
+        except socket.timeout:
+            result["status"] = "filtered"
+        except socket.gaierror:
+            logger.error(f"Could not resolve target: {self.target}")
+            result["status"] = "error"
+        except OSError as e:
+            logger.warning(f"Port {port} scan error: {e}")
+            result["status"] = "error"
+
+        if result["status"] == "open":
+            result["_sock"] = sock
+        else:
+            sock.close()
+
+        return result
 
     def grab_banner(self, sock: socket.socket, port: int) -> str:
         """
-        TODO (Week 9):
-        - After confirming a port is open, try to read whatever bytes
-          the service sends without prompting (many services like SSH,
-          FTP, and SMTP send a banner immediately on connect — you saw
-          this hinted at in exercise 01's "EXERCISE FOR YOU" section).
-        - For HTTP-like ports (80, 443, 8080), you'll need to actually
-          SEND a basic GET request first (reuse logic from exercise 01)
-          before you get anything back — HTTP servers don't send banners
-          unprompted.
-        - Wrap in try/except since not every port will respond the same
-          way; a banner grab can legitimately time out.
-        - Return the banner as a decoded string (or empty string if none).
+        Read whatever bytes the service sends unprompted (SSH/FTP/SMTP
+        do this). HTTP-like ports stay silent until spoken to, so send
+        a HEAD request first for those.
         """
-        logger.warning("grab_banner() not implemented — Phase 2")
-        raise NotImplementedError("Build this in Phase 2, Week 9")
+        banner = ""
+        try:
+            sock.settimeout(self.timeout)
+
+            if port in (80, 443, 8080, 8000, 8443):
+                request = f"HEAD / HTTP/1.0\r\nHost: {self.target}\r\n\r\n".encode()
+                sock.sendall(request)
+
+            data = sock.recv(1024)
+            banner = data.decode(errors="ignore").strip()
+        except (socket.timeout, OSError):
+            banner = ""
+        finally:
+            sock.close()
+
+        return banner
 
     def detect_service(self, port: int, banner: str) -> str:
         """
-        TODO (Week 10):
-        - Build a small dictionary mapping common ports to expected
-          service names as a fallback: {21: "FTP", 22: "SSH", 80: "HTTP", ...}
-        - Then improve on that fallback by pattern-matching the banner
-          string itself (e.g. if "SSH-2.0" appears in the banner, you
-          know it's SSH regardless of port — services aren't always on
-          their "default" port in real engagements).
-        - Return your best guess as a string, e.g. "OpenSSH 8.2".
+        Pattern-match the banner first (more reliable than port number
+        alone -- services get moved to nonstandard ports constantly in
+        real engagements). Falls back to well-known port mapping.
         """
-        logger.warning("detect_service() not implemented — Phase 2")
-        raise NotImplementedError("Build this in Phase 2, Week 10")
+        fallback_map = {
+            21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP",
+            53: "DNS", 80: "HTTP", 110: "POP3", 139: "NetBIOS",
+            143: "IMAP", 443: "HTTPS", 445: "SMB", 3306: "MySQL",
+            3389: "RDP", 8080: "HTTP-Proxy",
+        }
+
+        if banner:
+            b = banner.lower()
+            if "ssh" in b:
+                return banner.split("\r\n")[0].split("\n")[0][:60]
+            if b.startswith("http/") or "server:" in b:
+                for line in banner.split("\r\n"):
+                    if line.lower().startswith("server:"):
+                        return line.split(":", 1)[1].strip()
+                return "HTTP"
+            if "ftp" in b:
+                return "FTP"
+            if "smtp" in b or "mail" in b:
+                return "SMTP"
+
+        return fallback_map.get(port, "unknown")
 
     def scan_range(self) -> list:
         """
-        TODO (Week 11-12):
-        - This is the big one: use ThreadPoolExecutor (imported above)
-          with DEFAULT_THREAD_COUNT workers to call scan_port() across
-          self.ports concurrently instead of sequentially.
-        - Pattern to follow:
-
-            with ThreadPoolExecutor(max_workers=DEFAULT_THREAD_COUNT) as executor:
-                futures = {executor.submit(self.scan_port, p): p for p in self.ports}
-                for future in as_completed(futures):
-                    result = future.result()
-                    if result["status"] == "open":
-                        result["banner"] = self.grab_banner(...)
-                        result["service"] = self.detect_service(...)
-                    self.results.append(result)
-
-        - Time this against your Phase 0 sequential version on the same
-          target — this comparison is the actual "aha" moment of Phase 2.
-          Write the before/after numbers down, they're great interview
-          talking points.
+        Threaded scan across self.ports. Open ports get banner-grabbed
+        and service-detected before being added to results.
         """
-        logger.warning("scan_range() not implemented — Phase 2")
-        raise NotImplementedError("Build this in Phase 2, Weeks 11-12")
+        results = []
+        with ThreadPoolExecutor(max_workers=DEFAULT_THREAD_COUNT) as executor:
+            futures = {executor.submit(self.scan_port, p): p for p in self.ports}
+            for future in as_completed(futures):
+                result = future.result()
+                if result["status"] == "open":
+                    sock = result.pop("_sock", None)
+                    result["banner"] = self.grab_banner(sock, result["port"]) if sock else ""
+                    result["service"] = self.detect_service(result["port"], result["banner"])
+                results.append(result)
+
+        results.sort(key=lambda r: r["port"])
+        return results
 
     def run(self) -> list:
         """
         Orchestrates the scan and saves results to output/.
-        Once scan_range() works, this should just function.
         """
         logger.info(f"Starting port scan against {self.target}")
 

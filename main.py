@@ -41,7 +41,18 @@ def cmd_scan(args):
             ports = [int(p) for p in args.ports.split(",")]
 
     scanner = PortScanner(args.target, ports=ports)
-    scanner.run()
+    results = scanner.run()
+
+    open_ports = [r for r in results if r["status"] == "open"]
+    if open_ports:
+        logger.success(f"Found {len(open_ports)} open port(s):")
+        for r in open_ports:
+            service = r.get("service", "unknown")
+            banner = r.get("banner", "")
+            preview = f" -- {banner[:60]}" if banner else ""
+            logger.info(f"  {r['port']}/tcp  {service}{preview}")
+    else:
+        logger.warning("No open ports found")
 
 
 def cmd_vuln(args):
