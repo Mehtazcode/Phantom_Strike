@@ -19,6 +19,7 @@ OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 
 # Networking defaults — tune these as you build Phase 2's threaded scanner
 DEFAULT_SOCKET_TIMEOUT = 2.0
+BANNER_GRAB_TIMEOUT = 15.0  # some services (Telnet/SMTP on Metasploitable) do ident/reverse-DNS lookups before greeting
 DEFAULT_THREAD_COUNT = 50
 
 # Top 100 most common ports — a reasonable default scan range before you

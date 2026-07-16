@@ -16,6 +16,7 @@ from phantomstrike.core.config import (
     DEFAULT_THREAD_COUNT,
     COMMON_PORTS,
     OUTPUT_DIR,
+    BANNER_GRAB_TIMEOUT,
 )
 from phantomstrike.utils import logger
 
@@ -38,7 +39,7 @@ class PortScanner:
         result = {"port": port, "status": "closed", "banner": None}
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(self.timeout)
+        sock.settimeout(BANNER_GRAB_TIMEOUT)
 
         try:
             err = sock.connect_ex((self.target, port))
@@ -53,7 +54,8 @@ class PortScanner:
             result["status"] = "error"
 
         if result["status"] == "open":
-            result["_sock"] = sock
+            result["banner"] = self.grab_banner(sock, port)
+            result["service"] = self.detect_service(port, result["banner"])
         else:
             sock.close()
 
@@ -67,7 +69,7 @@ class PortScanner:
         """
         banner = ""
         try:
-            sock.settimeout(self.timeout)
+            sock.settimeout(BANNER_GRAB_TIMEOUT)
 
             if port in (80, 443, 8080, 8000, 8443):
                 request = f"HEAD / HTTP/1.0\r\nHost: {self.target}\r\n\r\n".encode()
@@ -98,7 +100,11 @@ class PortScanner:
         if banner:
             b = banner.lower()
             if "ssh" in b:
-                return banner.split("\r\n")[0].split("\n")[0][:60]
+                parts = banner.split("-", 2)
+                if len(parts) >= 3:
+                    version = parts[2].split()[0].replace("_", " ")
+                    return f"SSH ({version})"
+                return "SSH"
             if b.startswith("http/") or "server:" in b:
                 for line in banner.split("\r\n"):
                     if line.lower().startswith("server:"):
@@ -120,12 +126,7 @@ class PortScanner:
         with ThreadPoolExecutor(max_workers=DEFAULT_THREAD_COUNT) as executor:
             futures = {executor.submit(self.scan_port, p): p for p in self.ports}
             for future in as_completed(futures):
-                result = future.result()
-                if result["status"] == "open":
-                    sock = result.pop("_sock", None)
-                    result["banner"] = self.grab_banner(sock, result["port"]) if sock else ""
-                    result["service"] = self.detect_service(result["port"], result["banner"])
-                results.append(result)
+                results.append(future.result())
 
         results.sort(key=lambda r: r["port"])
         return results
