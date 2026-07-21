@@ -27,7 +27,10 @@ DEFAULT_THREAD_COUNT = 50
 # this times full HTTP request/response round-trips over `requests`, and must
 # be long enough to let a SLEEP(5) time-based SQLi payload actually complete
 # (see vuln_detector.py detect_sqli()).
-HTTP_REQUEST_TIMEOUT = 10.0
+# Bumped from 10.0 -- too tight against detect_sqli()'s SLEEP(5)
+# time-based payload once DB scheduling + network overhead is added;
+# confirmed via a real timeout during DVWA testing (Phase 3).
+HTTP_REQUEST_TIMEOUT = 20.0
 
 # Top 100 most common ports — a reasonable default scan range before you
 # implement full 1-65535 scanning. Extend this list as you learn which

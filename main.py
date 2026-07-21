@@ -64,7 +64,14 @@ def cmd_vuln(args):
             key, _, value = pair.partition("=")
             extra_params[key.strip()] = value.strip()
     detector = VulnDetector(args.target, session_cookie=args.cookie, extra_params=extra_params)
-    detector.run_all(args.param)
+
+    if args.check_creds:
+        # Login-form mode -- args.target is treated as the login page
+        # URL, not a vulnerable param page. Mutually exclusive with the
+        # SQLi/XSS/LFI scan since a login page has no --param to test.
+        detector.check_default_creds(args.target)
+    else:
+        detector.run_all(args.param)
 
 
 def cmd_payload(args):
@@ -105,6 +112,7 @@ def build_parser():
     p_vuln.add_argument("--param", required=True, help="Parameter name to test, e.g. id")
     p_vuln.add_argument("--cookie", default=None, help="Raw cookie header string for authenticated testing, e.g. \"PHPSESSID=xxx; security=low\"")
     p_vuln.add_argument("--extra-params", default=None, help="Extra static form params as key=value,key2=value2 -- e.g. \"Submit=Submit\" for DVWA's SQLi page")
+    p_vuln.add_argument("--check-creds", action="store_true", help="Test default credentials against --target as a login page, instead of the SQLi/XSS/LFI scan")
     p_vuln.set_defaults(func=cmd_vuln)
 
     # payload

@@ -110,6 +110,28 @@ LFI_PAYLOADS = [
 LFI_PASSWD_PATTERN = re.compile(r"root:.*?:0:0:")
 
 
+# --- Default credentials --------------------------------------------------
+
+# Short and deliberately conservative -- this is functionally a brute
+# force attack, only ever run against systems you own.
+DEFAULT_CREDS = [
+    ("admin", "admin"),
+    ("admin", "password"),
+    ("root", "root"),
+    ("root", "toor"),
+]
+
+# DVWA's login.php shows this exact string on a failed attempt. Its
+# ABSENCE from the post-login response is the actual proof of success --
+# not status code alone, since login.php can return 200 on both
+# outcomes depending on DVWA version/config.
+LOGIN_FAILED_STRING = "Login failed"
+
+# Scrapes the single-use CSRF token DVWA embeds on login.php. Confirmed
+# present via direct curl inspection before writing this detector.
+USER_TOKEN_PATTERN = re.compile(r"name='user_token' value='([a-f0-9]+)'")
+
+
 class VulnDetector:
     def __init__(self, target_url: str, session_cookie: str = None, extra_params: dict = None):
         self.target_url = target_url
@@ -297,17 +319,73 @@ class VulnDetector:
 
     def check_default_creds(self, login_url: str, creds_list: list = None) -> list:
         """
-        TODO (bonus, if time allows):
-        - Try a small list of common default credential pairs
-          (admin/admin, admin/password, root/root, etc.) against a
-          login form using `requests.post()`.
-        - Detect success by checking for a redirect, a cookie being set,
-          or absence of a "login failed" string in the response.
-        - Keep this list SHORT and only test against systems you own --
-          this is functionally a brute force attack.
+        Tries a short list of default credential pairs against a login
+        form. Confirms success via the ACTUAL absence of the login-
+        failure string in the response -- not status code alone, since
+        login pages often return 200 on both success and failure.
+
+        Uses requests.Session() rather than the module's _send() helper
+        -- this needs cookie persistence across the token-fetch GET and
+        the login POST, which a one-shot request can't provide. DVWA
+        embeds a single-use CSRF user_token on login.php that must be
+        scraped fresh before each attempt.
+
+        NOTE: field names (username, password, Login, user_token) are
+        tuned to DVWA's login form specifically -- would need adjusting
+        for other targets.
         """
-        logger.warning("check_default_creds() not implemented -- optional, Phase 3")
-        raise NotImplementedError("Optional -- build if time allows")
+        findings = []
+        creds = creds_list or DEFAULT_CREDS
+        logger.info(f"Testing default credentials against {login_url}")
+
+        for username, password in creds:
+            session = requests.Session()
+            try:
+                get_resp = session.get(login_url, timeout=HTTP_REQUEST_TIMEOUT)
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Could not fetch login page: {e}")
+                continue
+
+            token_match = USER_TOKEN_PATTERN.search(get_resp.text)
+            token = token_match.group(1) if token_match else None
+
+            post_data = {"username": username, "password": password, "Login": "Login"}
+            if token:
+                post_data["user_token"] = token
+
+            try:
+                post_resp = session.post(login_url, data=post_data, timeout=HTTP_REQUEST_TIMEOUT)
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Login attempt failed for {username}:{password} -- {e}")
+                continue
+
+            if LOGIN_FAILED_STRING not in post_resp.text:
+                evidence = f"Login succeeded with {username}:{password} -- '{LOGIN_FAILED_STRING}' absent from response"
+                findings.append(self._make_finding(
+                    "DefaultCreds", "login", f"{username}:{password}", "critical", evidence,
+                    True, "login_failure_string_absent",
+                ))
+                logger.finding("critical", f"Default credentials confirmed: {username}:{password}")
+
+        self.findings.extend(findings)
+        out_path = self._save_findings()
+        logger.success(f"Credential check complete: {len(findings)} confirmed finding(s), saved to {out_path}")
+        return findings
+
+    def _save_findings(self) -> str:
+        """
+        Shared save logic used by both run_all() and check_default_creds()
+        -- extracted so credential-check results actually get persisted
+        to output/ instead of only being logged and discarded (the gap
+        that surfaced when check_default_creds() was first tested live:
+        the finding printed to console but no JSON file was written).
+        """
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        safe_name = self.target_url.replace("://", "_").replace("/", "_")
+        out_path = os.path.join(OUTPUT_DIR, f"vuln_{safe_name}.json")
+        with open(out_path, "w") as f:
+            json.dump(self.findings, f, indent=2)
+        return out_path
 
     def run_all(self, param_name: str) -> list:
         """
@@ -322,12 +400,7 @@ class VulnDetector:
             except NotImplementedError:
                 pass
 
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        safe_name = self.target_url.replace("://", "_").replace("/", "_")
-        out_path = os.path.join(OUTPUT_DIR, f"vuln_{safe_name}.json")
-        with open(out_path, "w") as f:
-            json.dump(self.findings, f, indent=2)
-
+        out_path = self._save_findings()
         confirmed_count = sum(1 for f in self.findings if f["confirmed"])
         logger.success(f"Vulnerability scan complete: {confirmed_count} confirmed finding(s), saved to {out_path}")
         return self.findings
