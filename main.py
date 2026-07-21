@@ -57,7 +57,13 @@ def cmd_scan(args):
 
 def cmd_vuln(args):
     from phantomstrike.vuln.vuln_detector import VulnDetector
-    detector = VulnDetector(args.target, session_cookie=args.cookie)
+    extra_params = {}
+    if args.extra_params:
+        # "Submit=Submit,foo=bar" -> {"Submit": "Submit", "foo": "bar"}
+        for pair in args.extra_params.split(","):
+            key, _, value = pair.partition("=")
+            extra_params[key.strip()] = value.strip()
+    detector = VulnDetector(args.target, session_cookie=args.cookie, extra_params=extra_params)
     detector.run_all(args.param)
 
 
@@ -97,7 +103,8 @@ def build_parser():
     p_vuln = subparsers.add_parser("vuln", help="Run vulnerability detector against a target URL")
     p_vuln.add_argument("--target", required=True, help="Full target URL, e.g. http://localhost/dvwa")
     p_vuln.add_argument("--param", required=True, help="Parameter name to test, e.g. id")
-    p_vuln.add_argument("--cookie", default=None, help="Session cookie for authenticated testing (DVWA etc.)")
+    p_vuln.add_argument("--cookie", default=None, help="Raw cookie header string for authenticated testing, e.g. \"PHPSESSID=xxx; security=low\"")
+    p_vuln.add_argument("--extra-params", default=None, help="Extra static form params as key=value,key2=value2 -- e.g. \"Submit=Submit\" for DVWA's SQLi page")
     p_vuln.set_defaults(func=cmd_vuln)
 
     # payload

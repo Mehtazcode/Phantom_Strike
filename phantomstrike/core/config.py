@@ -22,6 +22,13 @@ DEFAULT_SOCKET_TIMEOUT = 2.0
 BANNER_GRAB_TIMEOUT = 15.0  # some services (Telnet/SMTP on Metasploitable) do ident/reverse-DNS lookups before greeting
 DEFAULT_THREAD_COUNT = 50
 
+# HTTP request timeout for Phase 3's requests-based vuln checks (SQLi/XSS/LFI).
+# Kept separate from the socket timeouts above -- those time raw TCP connects,
+# this times full HTTP request/response round-trips over `requests`, and must
+# be long enough to let a SLEEP(5) time-based SQLi payload actually complete
+# (see vuln_detector.py detect_sqli()).
+HTTP_REQUEST_TIMEOUT = 10.0
+
 # Top 100 most common ports — a reasonable default scan range before you
 # implement full 1-65535 scanning. Extend this list as you learn which
 # ports matter for which services.
