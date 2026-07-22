@@ -66,14 +66,11 @@ Two of these came from testing against a real target rather than assuming reques
 
 Ran all three core detectors against DVWA at each security tier to see what survives basic filtering — real evidence, not assumption, in every case below:
 
-+----------+----------------------------+------------------------+------------+------------------------------------------+
-| Detector | Low                        | Medium                 | High       | Why                                       |
-+----------+----------------------------+------------------------+------------+------------------------------------------+
-| SQLi     | confirmed                  | blocked                | blocked    | quote escaping blocks breakout entirely   |
-| XSS      | confirmed                  | confirmed (bypass)     | confirmed  | filter blacklists <script> tag only       |
-| LFI      | confirmed (traversal+path) | confirmed (path only)  | blocked    | medium blocks traversal, not bare path;   |
-|          |                            |                        |            | high switches to a whitelist              |
-+----------+----------------------------+------------------------+------------+------------------------------------------+
+| Detector | Low | Medium | High | Why |
+|---|---|---|---|---|
+| SQLi | confirmed | blocked | blocked | quote escaping blocks breakout entirely |
+| XSS | confirmed | confirmed (bypass) | confirmed | filter blacklists `<script>` tag only |
+| LFI | confirmed (traversal+path) | confirmed (path only) | blocked | medium blocks traversal, not bare path; high switches to a whitelist |
 
 **Traversal depth is install-specific and was found empirically, not assumed.** The originally-assumed depth (4 levels of `../`) never worked on this install at *any* security level — not because of filtering, but because this DVWA deployment sits 6 directory levels below filesystem root. Confirmed via a depth-sweep (1–6) cross-checked against Apache's error log, which showed the literal path PHP attempted to `include()` at each depth. `LFI_PAYLOADS` now sweeps depths 4–8 to improve the odds of landing on the right depth on a different install, though a fully dynamic depth-detection pass would be the more robust fix (tracked as a known limitation, not yet built).
 
@@ -125,19 +122,21 @@ export ANTHROPIC_API_KEY="your_key_here"   # enables AI-assisted reporting (Phas
 
 ## Architecture
 
+```
 PhantomStrike/
-├── main.py # CLI entry point (argparse)
+├── main.py                     # CLI entry point (argparse)
 ├── phantomstrike/
-│ ├── core/ # config, banner
-│ ├── recon/ # Phase 1 - ReconEngine
-│ ├── scanner/ # Phase 2 - PortScanner
-│ ├── vuln/ # Phase 3 - VulnDetector
-│ ├── payload/ # Phase 4 - PayloadGenerator
-│ ├── report/ # Phase 5 - ReportGenerator
-│ └── utils/ # shared logger
+│   ├── core/                   # config, banner
+│   ├── recon/                  # Phase 1 - ReconEngine
+│   ├── scanner/                # Phase 2 - PortScanner
+│   ├── vuln/                   # Phase 3 - VulnDetector
+│   ├── payload/                # Phase 4 - PayloadGenerator
+│   ├── report/                 # Phase 5 - ReportGenerator
+│   └── utils/                  # shared logger
 ├── data/wordlists/
-├── output/ # JSON results and PDF reports (gitignored)
-└── learning_exercises/ # raw socket fundamentals exercises
+├── output/                     # JSON results and PDF reports (gitignored)
+└── learning_exercises/         # raw socket fundamentals exercises
+```
 
 ## About
 
