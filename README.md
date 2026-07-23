@@ -143,3 +143,29 @@ PhantomStrike/
 Built by Pratham, final-year B.Tech Computer Engineering student, as a portfolio project for penetration testing roles.
 
 This is a work in progress, built at ~1–2 hours/day. Follow along for updates as each phase ships.
+
+## WAF Testing (ModSecurity + OWASP CRS)
+
+DVWA and Metasploitable prove the detector's logic works, but they're intentionally vulnerable training platforms with toy filters — not evidence the tool holds up against anything resembling production defenses. To test that, ModSecurity (Apache module) with the OWASP Core Rule Set (CRS 3.3.9) was installed in front of the same DVWA instance, running in full blocking mode (`SecRuleEngine On`, anomaly-score threshold of 5 — CRS's documented default), and every detector was re-run against DVWA-low.
+
+**Result: every payload sent by every detector was blocked, with independent rule categories firing for each attack type.**
+
+```
++----------+---------------------------------------+------------------------------+
+| Detector | CRS rules triggered                   | Result                       |
++----------+---------------------------------------+------------------------------+
+| SQLi     | 942100 (libinjection), 942190, 942360 | 403 - anomaly score 18       |
+| XSS      | 941100 (libinjection), 941110, 941120,| 403 - blocked every variant, |
+|          | 941160                                | including onerror= handler   |
+|          |                                       | payload that beat DVWA-high  |
+| LFI      | 930100, 930110, 930120, 932160 (RCE)  | 403 - blocked traversal AND  |
+|          |                                       | the bare-path payload that   |
+|          |                                       | beat DVWA-medium             |
++----------+---------------------------------------+------------------------------+
+```
+
+The most notable result: CRS's **event-handler vector rule (`941120`)** caught `<img src=x onerror=alert(...)>` — the exact payload that bypassed DVWA's own XSS filter at *every* security level, including high. This is the clearest evidence that DVWA's built-in filters and a real-world rule set are not equivalent difficulty tiers; CRS's XSS detection covers attack surface (event handlers, not just `<script>` tags) that DVWA's blacklist never accounted for regardless of its "security level" setting.
+
+Similarly, the bare `/etc/passwd` absolute-path LFI payload — which bypassed DVWA-medium's traversal-only filter — was independently caught by CRS's `930120` "OS File Access Attempt" rule, which matches the literal string `etc/passwd` anywhere in the request regardless of path syntax, plus a second, unrelated RCE rule (`932160`) for the same payload. Multiple overlapping rule categories catching the same attack is a real demonstration of defense-in-depth, something none of DVWA's single-purpose filters provide.
+
+**What this test does and doesn't prove.** A signature/anomaly-scoring WAF like CRS is built to catch known attack patterns — it's very effective against exactly the kind of payloads this detector generates, which resemble textbook SQLi/XSS/LFI syntax. It says nothing about the detector's ability to find business-logic flaws, novel encoding tricks that evade CRS's own patterns, or vulnerabilities that don't require an obviously "attack-shaped" payload to trigger. Getting blocked by CRS here is a meaningful result, but it's a test of the payloads' signature-recognizability, not a full measure of the tool's real-world effectiveness — that's what ongoing bug bounty work (tracked separately) is for.
