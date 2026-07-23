@@ -1,0 +1,47 @@
+{
+  "target": "http://127.0.0.1/dvwa",
+  "rate_limit_ms": 200,
+  "auth": {
+    "login_url": "http://127.0.0.1/dvwa/login.php",
+    "field_map": {
+      "username_field": "username",
+      "password_field": "password",
+      "submit_field": "Login",
+      "submit_value": "Login"
+    },
+    "csrf_token": {
+      "present": true,
+      "field_name": "user_token",
+      "regex": "name='user_token' value='([a-f0-9]+)'"
+    },
+    "failure_string": "Login failed",
+    "cookie": "PHPSESSID=REPLACE_ME; security=low"
+  },
+  "endpoints": [
+    {
+      "url": "http://127.0.0.1/dvwa/vulnerabilities/sqli/",
+      "method": "GET",
+      "body_type": "query",
+      "test_params": ["id"],
+      "default_params": {"id": "1"},
+      "extra_static_params": {"Submit": "Submit"}
+    },
+    {
+      "url": "http://127.0.0.1/dvwa/vulnerabilities/xss_r/",
+      "method": "GET",
+      "body_type": "query",
+      "test_params": ["name"],
+      "default_params": {"name": "test"},
+      "extra_static_params": {}
+    },
+    {
+      "url": "http://127.0.0.1/dvwa/vulnerabilities/fi/",
+      "method": "GET",
+      "body_type": "query",
+      "test_params": ["page"],
+      "default_params": {"page": "include.php"},
+      "extra_static_params": {}
+    }
+  ],
+  "noise_patterns": []
+}
