@@ -37,6 +37,7 @@ import uuid
 import requests
 from phantomstrike.core.config import OUTPUT_DIR, HTTP_REQUEST_TIMEOUT
 from phantomstrike.utils import logger
+from phantomstrike.core.target_profile import TargetProfile, Endpoint
 
 
 # --- SQLi -----------------------------------------------------------------
@@ -145,7 +146,8 @@ USER_TOKEN_PATTERN = re.compile(r"name='user_token' value='([a-f0-9]+)'")
 
 
 class VulnDetector:
-    def __init__(self, target_url: str, session_cookie: str = None, extra_params: dict = None):
+    def __init__(self, target_url: str, session_cookie: str = None, extra_params: dict = None,
+                 profile: TargetProfile = None, endpoint: Endpoint = None):
         self.target_url = target_url
         self.session_cookie = session_cookie  # needed for authenticated DVWA testing
         # Static params merged into every request alongside the payload --
@@ -155,6 +157,22 @@ class VulnDetector:
         # testing: identical payload, but no query executed without it.
         self.extra_params = extra_params or {}
         self.findings = []
+
+        # Profile-driven mode (optional). When both are set, _send()
+        # uses the endpoint's method/body_type/default_params instead
+        # of the legacy GET-only/query-string-only path below. Legacy
+        # single-target/--param callers leave these as None and get
+        # unchanged behavior.
+        self.profile = profile
+        self.endpoint = endpoint
+        if endpoint is not None:
+            # endpoint's own target_url/cookie take precedence over the
+            # legacy constructor args, since profile mode is the source
+            # of truth for its own requests
+            self.target_url = endpoint.url
+            if profile and profile.auth.cookie:
+                self.session_cookie = profile.auth.cookie
+            self.extra_params = endpoint.extra_static_params
 
     # --- shared helpers ---------------------------------------------------
 
@@ -166,6 +184,18 @@ class VulnDetector:
         treat None as "couldn't test this payload", never as a negative
         result. Same graceful-degradation pattern as crt.sh in Phase 1.
 
+        LEGACY MODE (self.endpoint is None): unchanged from the original
+        implementation -- GET request, query-string params. This is
+        what every --target/--param CLI invocation still uses.
+
+        PROFILE MODE (self.endpoint is set): uses endpoint.method
+        (GET/POST) and endpoint.body_type (query/json) to build the
+        request. Every OTHER test_param on the endpoint gets its
+        default_params baseline value, so injecting into one param
+        doesn't break the request by leaving required fields empty.
+        Applies profile.rate_limit_ms as a delay before sending, so a
+        real engagement doesn't hammer the target.
+
         self.session_cookie is a raw cookie header string, e.g.
         "PHPSESSID=xxx; security=low" -- copy-pasted straight from
         devtools. Sent as a literal Cookie header rather than built
@@ -173,14 +203,58 @@ class VulnDetector:
         MULTIPLE cookies (session + security level), not just one.
         """
         headers = {"Cookie": self.session_cookie} if self.session_cookie else None
-        params = {param_name: payload, **self.extra_params}
+
+        if self.endpoint is None:
+            # Legacy path -- unchanged.
+            params = {param_name: payload, **self.extra_params}
+            try:
+                return requests.get(
+                    self.target_url,
+                    params=params,
+                    headers=headers,
+                    timeout=HTTP_REQUEST_TIMEOUT,
+                )
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Request failed for payload {payload[:50]!r}: {e}")
+                return None
+
+        # Profile-driven path.
+        if self.profile and self.profile.rate_limit_ms > 0:
+            time.sleep(self.profile.rate_limit_ms / 1000.0)
+
+        # Start from every param's default/baseline value, then
+        # overwrite the one being tested with the actual payload --
+        # this keeps the request well-formed even when other required
+        # fields (sort, page, submit buttons, etc.) are present.
+        body = dict(self.endpoint.default_params)
+        body[param_name] = payload
+        body.update(self.endpoint.extra_static_params)
+
         try:
-            return requests.get(
-                self.target_url,
-                params=params,
-                headers=headers,
-                timeout=HTTP_REQUEST_TIMEOUT,
-            )
+            if self.endpoint.method == "POST":
+                if self.endpoint.body_type == "json":
+                    return requests.post(
+                        self.target_url,
+                        json=body,
+                        headers=headers,
+                        timeout=HTTP_REQUEST_TIMEOUT,
+                    )
+                else:
+                    return requests.post(
+                        self.target_url,
+                        data=body,
+                        headers=headers,
+                        timeout=HTTP_REQUEST_TIMEOUT,
+                    )
+            else:
+                # GET -- body_type is effectively always "query" here,
+                # since GET requests don't carry a JSON body.
+                return requests.get(
+                    self.target_url,
+                    params=body,
+                    headers=headers,
+                    timeout=HTTP_REQUEST_TIMEOUT,
+                )
         except requests.exceptions.RequestException as e:
             logger.warning(f"Request failed for payload {payload[:50]!r}: {e}")
             return None

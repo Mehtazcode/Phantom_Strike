@@ -15,7 +15,7 @@
       "regex": "name='user_token' value='([a-f0-9]+)'"
     },
     "failure_string": "Login failed",
-    "cookie": "PHPSESSID=REPLACE_ME; security=low"
+    "cookie": "PHPSESSID=cb31eaf1f6701ed2cbb7ade0c7625837; security=low"
   },
   "endpoints": [
     {
