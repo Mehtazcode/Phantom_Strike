@@ -57,6 +57,37 @@ def cmd_scan(args):
 
 def cmd_vuln(args):
     from phantomstrike.vuln.vuln_detector import VulnDetector
+
+    if args.profile:
+        # Profile-driven mode -- one JSON file describes every endpoint,
+        # its params, and the auth flow, so a whole engagement runs from
+        # a single flag instead of one --target/--param call per param
+        # per endpoint. See profiles/dvwa_example.json for the shape.
+        from phantomstrike.core.target_profile import TargetProfile, TargetProfileError
+        try:
+            profile = TargetProfile.from_file(args.profile)
+        except TargetProfileError as e:
+            logger.error(f"Failed to load profile: {e}")
+            return
+
+        if args.check_creds:
+            # Credential check uses profile.auth directly -- it isn't
+            # tied to any one endpoint, so no endpoint/loop needed.
+            detector = VulnDetector(profile.target, profile=profile)
+            detector.check_default_creds()
+            return
+
+        for endpoint in profile.endpoints:
+            logger.info(f"--- Testing endpoint: {endpoint.url} ---")
+            detector = VulnDetector(endpoint.url, profile=profile, endpoint=endpoint)
+            detector.run_all()
+        return
+
+    # Legacy mode -- unchanged from the original implementation.
+    if not args.target or not args.param:
+        logger.error("--target and --param are required unless --profile is given")
+        return
+
     extra_params = {}
     if args.extra_params:
         # "Submit=Submit,foo=bar" -> {"Submit": "Submit", "foo": "bar"}
@@ -108,11 +139,12 @@ def build_parser():
 
     # vuln
     p_vuln = subparsers.add_parser("vuln", help="Run vulnerability detector against a target URL")
-    p_vuln.add_argument("--target", required=True, help="Full target URL, e.g. http://localhost/dvwa")
-    p_vuln.add_argument("--param", required=True, help="Parameter name to test, e.g. id")
+    p_vuln.add_argument("--target", default=None, help="Full target URL, e.g. http://localhost/dvwa (ignored if --profile is given)")
+    p_vuln.add_argument("--param", default=None, help="Parameter name to test, e.g. id (ignored if --profile is given)")
+    p_vuln.add_argument("--profile", default=None, help="Path to a target profile JSON -- runs every endpoint/param defined there instead of a single --target/--param call, e.g. profiles/dvwa_example.json")
     p_vuln.add_argument("--cookie", default=None, help="Raw cookie header string for authenticated testing, e.g. \"PHPSESSID=xxx; security=low\"")
     p_vuln.add_argument("--extra-params", default=None, help="Extra static form params as key=value,key2=value2 -- e.g. \"Submit=Submit\" for DVWA's SQLi page")
-    p_vuln.add_argument("--check-creds", action="store_true", help="Test default credentials against --target as a login page, instead of the SQLi/XSS/LFI scan")
+    p_vuln.add_argument("--check-creds", action="store_true", help="Test default credentials instead of the SQLi/XSS/LFI scan -- against --target as a login page in legacy mode, or against profile.auth in --profile mode")
     p_vuln.set_defaults(func=cmd_vuln)
 
     # payload

@@ -271,9 +271,59 @@ class VulnDetector:
             "verification_method": verification_method,
         }
 
+    def _resolve_test_params(self, param_name: str = None) -> list:
+        """
+        PROFILE MODE (self.endpoint set): test_params comes straight from
+        the endpoint -- this is what lets detect_sqli/xss/lfi run against
+        every field on an endpoint automatically instead of one manual
+        call per param.
+
+        LEGACY MODE (self.endpoint is None): unchanged behavior, just the
+        single param_name passed in by the CLI caller, wrapped in a list
+        so both modes can share one loop in the detectors below.
+        """
+        if self.endpoint is not None:
+            return self.endpoint.test_params
+        if param_name is None:
+            raise ValueError(
+                "param_name is required when no profile/endpoint is set "
+                "(legacy mode needs an explicit --param)"
+            )
+        return [param_name]
+
+    def _strip_noise(self, text: str) -> str:
+        """
+        Strips profile.noise_patterns (regexes for session tokens,
+        timestamps, CSRF nonces, etc.) out of response text before
+        length/content comparisons. Exists because boolean_diff's
+        "ignore small diffs" threshold is a blunt instrument -- a page
+        with a per-request nonce embedded in it will show a byte-count
+        diff on EVERY request pair regardless of whether the SQLi
+        payload did anything, and that noise can mask or fake a real
+        diff. No-ops in legacy mode (no profile) or if the profile
+        defines no noise_patterns, so existing behavior is unchanged
+        unless a profile opts into this.
+        """
+        if not self.profile or not self.profile.noise_patterns:
+            return text
+        for pattern in self.profile.noise_patterns:
+            text = re.sub(pattern, "", text)
+        return text
+
     # --- detectors ----------------------------------------------------------
 
-    def detect_sqli(self, param_name: str) -> list:
+    def detect_sqli(self, param_name: str = None) -> list:
+        """
+        Public entry point -- resolves which param(s) to test (one in
+        legacy mode, all of endpoint.test_params in profile mode) and
+        runs the real per-param logic (_detect_sqli_single) against each.
+        """
+        findings = []
+        for p in self._resolve_test_params(param_name):
+            findings.extend(self._detect_sqli_single(p))
+        return findings
+
+    def _detect_sqli_single(self, param_name: str) -> list:
         """
         Three independent confirmations, each proving the backend query
         actually changed because of our input -- not just guessing from
@@ -294,12 +344,15 @@ class VulnDetector:
             if true_resp is None or false_resp is None:
                 continue
 
-            len_diff = abs(len(true_resp.text) - len(false_resp.text))
+            true_text = self._strip_noise(true_resp.text)
+            false_text = self._strip_noise(false_resp.text)
+
+            len_diff = abs(len(true_text) - len(false_text))
             if len_diff > 20:  # ignore small diffs (timestamps/nonces/etc.)
                 evidence = (
-                    f"TRUE payload '{true_payload}' returned {len(true_resp.text)} bytes, "
-                    f"FALSE payload '{false_payload}' returned {len(false_resp.text)} bytes "
-                    f"(diff={len_diff})"
+                    f"TRUE payload '{true_payload}' returned {len(true_text)} bytes, "
+                    f"FALSE payload '{false_payload}' returned {len(false_text)} bytes "
+                    f"(diff={len_diff}, noise-stripped)"
                 )
                 findings.append(self._make_finding(
                     "SQLi", param_name, true_payload, "high", evidence,
@@ -349,7 +402,14 @@ class VulnDetector:
 
         return findings
 
-    def detect_xss(self, param_name: str) -> list:
+    def detect_xss(self, param_name: str = None) -> list:
+        """Public entry point -- see detect_sqli() docstring above."""
+        findings = []
+        for p in self._resolve_test_params(param_name):
+            findings.extend(self._detect_xss_single(p))
+        return findings
+
+    def _detect_xss_single(self, param_name: str) -> list:
         """
         Reflected XSS only (stored XSS is the stretch goal noted in the
         original stub). A finding is confirmed only if the EXACT payload
@@ -377,7 +437,14 @@ class VulnDetector:
 
         return findings
 
-    def detect_lfi(self, param_name: str) -> list:
+    def detect_lfi(self, param_name: str = None) -> list:
+        """Public entry point -- see detect_sqli() docstring above."""
+        findings = []
+        for p in self._resolve_test_params(param_name):
+            findings.extend(self._detect_lfi_single(p))
+        return findings
+
+    def _detect_lfi_single(self, param_name: str) -> list:
         """
         Confirms via actual /etc/passwd content pattern match -- not
         "response changed" or "status 200", both of which are unreliable
@@ -403,7 +470,7 @@ class VulnDetector:
 
         return findings
 
-    def check_default_creds(self, login_url: str, creds_list: list = None) -> list:
+    def check_default_creds(self, login_url: str = None, creds_list: list = None) -> list:
         """
         Tries a short list of default credential pairs against a login
         form. Confirms success via the ACTUAL absence of the login-
@@ -412,41 +479,84 @@ class VulnDetector:
 
         Uses requests.Session() rather than the module's _send() helper
         -- this needs cookie persistence across the token-fetch GET and
-        the login POST, which a one-shot request can't provide. DVWA
-        embeds a single-use CSRF user_token on login.php that must be
-        scraped fresh before each attempt.
+        the login POST, which a one-shot request can't provide.
 
-        NOTE: field names (username, password, Login, user_token) are
-        tuned to DVWA's login form specifically -- would need adjusting
-        for other targets.
+        PROFILE MODE (self.profile is set): field names, CSRF handling,
+        and the failure-string signal all come from profile.auth
+        (field_map / csrf_token / failure_string) instead of being
+        hardcoded -- this is what makes credential checking work
+        against a target whose login form doesn't look like DVWA's.
+        login_url falls back to profile.auth.login_url if not passed
+        explicitly.
+
+        LEGACY MODE (self.profile is None): unchanged from the original
+        implementation -- hardcoded DVWA field names (username,
+        password, Login, user_token) and the DVWA-specific
+        "Login failed" string, exactly as before.
         """
         findings = []
         creds = creds_list or DEFAULT_CREDS
-        logger.info(f"Testing default credentials against {login_url}")
+
+        if self.profile is not None:
+            auth = self.profile.auth
+            target_login_url = login_url or auth.login_url
+            if not target_login_url:
+                logger.error(
+                    "No login_url available -- set auth.login_url in the "
+                    "profile or pass login_url explicitly"
+                )
+                return findings
+
+            username_field = auth.field_map.get("username_field", "username")
+            password_field = auth.field_map.get("password_field", "password")
+            submit_field = auth.field_map.get("submit_field")
+            submit_value = auth.field_map.get("submit_value")
+            failure_string = auth.failure_string or LOGIN_FAILED_STRING
+
+            csrf_present = auth.csrf_token.get("present", False)
+            csrf_field_name = auth.csrf_token.get("field_name")
+            csrf_regex = auth.csrf_token.get("regex")
+            csrf_pattern = re.compile(csrf_regex) if (csrf_present and csrf_regex) else None
+        else:
+            if not login_url:
+                logger.error("check_default_creds() requires login_url in legacy mode")
+                return findings
+            target_login_url = login_url
+            username_field, password_field = "username", "password"
+            submit_field, submit_value = "Login", "Login"
+            failure_string = LOGIN_FAILED_STRING
+            csrf_field_name = "user_token"
+            csrf_pattern = USER_TOKEN_PATTERN
+
+        logger.info(f"Testing default credentials against {target_login_url}")
 
         for username, password in creds:
             session = requests.Session()
             try:
-                get_resp = session.get(login_url, timeout=HTTP_REQUEST_TIMEOUT)
+                get_resp = session.get(target_login_url, timeout=HTTP_REQUEST_TIMEOUT)
             except requests.exceptions.RequestException as e:
                 logger.warning(f"Could not fetch login page: {e}")
                 continue
 
-            token_match = USER_TOKEN_PATTERN.search(get_resp.text)
-            token = token_match.group(1) if token_match else None
+            token = None
+            if csrf_pattern is not None:
+                token_match = csrf_pattern.search(get_resp.text)
+                token = token_match.group(1) if token_match else None
 
-            post_data = {"username": username, "password": password, "Login": "Login"}
-            if token:
-                post_data["user_token"] = token
+            post_data = {username_field: username, password_field: password}
+            if submit_field and submit_value:
+                post_data[submit_field] = submit_value
+            if token and csrf_field_name:
+                post_data[csrf_field_name] = token
 
             try:
-                post_resp = session.post(login_url, data=post_data, timeout=HTTP_REQUEST_TIMEOUT)
+                post_resp = session.post(target_login_url, data=post_data, timeout=HTTP_REQUEST_TIMEOUT)
             except requests.exceptions.RequestException as e:
                 logger.warning(f"Login attempt failed for {username}:{password} -- {e}")
                 continue
 
-            if LOGIN_FAILED_STRING not in post_resp.text:
-                evidence = f"Login succeeded with {username}:{password} -- '{LOGIN_FAILED_STRING}' absent from response"
+            if failure_string not in post_resp.text:
+                evidence = f"Login succeeded with {username}:{password} -- '{failure_string}' absent from response"
                 findings.append(self._make_finding(
                     "DefaultCreds", "login", f"{username}:{password}", "critical", evidence,
                     True, "login_failure_string_absent",
@@ -473,10 +583,13 @@ class VulnDetector:
             json.dump(self.findings, f, indent=2)
         return out_path
 
-    def run_all(self, param_name: str) -> list:
+    def run_all(self, param_name: str = None) -> list:
         """
-        Orchestrates all detectors against a single parameter and saves
-        results.
+        Orchestrates all detectors and saves results. In profile mode
+        (self.endpoint set), param_name can be omitted entirely -- each
+        detector resolves and loops over endpoint.test_params on its
+        own. In legacy mode, param_name is still required (each detector
+        raises ValueError via _resolve_test_params if it's missing).
         """
         logger.info(f"Starting vulnerability scan against {self.target_url}")
 
